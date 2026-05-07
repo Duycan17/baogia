@@ -1,0 +1,10 @@
+[project]
+name = "tramproject"
+version = "0.1.0"
+description = "POC: Word price reports + Streamlit UI + local discount history"
+requires-python = ">=3.12"
+dependencies = [
+    "pillow>=12.2.0",
+    "python-docx>=1.2.0",
+    "streamlit>=1.57.0",
+]
