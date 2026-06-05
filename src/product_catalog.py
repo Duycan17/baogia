@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from dataclasses import dataclass
@@ -10,8 +11,11 @@ from pathlib import Path
 
 import xlrd
 
+from xls_image_extractor import extract_embedded_images
+
 _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_CATALOG = _ROOT / "file nhap quat AMIS.xls"
+_IMAGE_CACHE_DIR = _ROOT / "data" / "product_images"
 
 
 def _norm_header(text: str) -> str:
@@ -20,6 +24,11 @@ def _norm_header(text: str) -> str:
 
 def _norm_code(code: str) -> str:
     return re.sub(r"\s+", "", str(code).strip()).lower()
+
+
+def _safe_image_stem(code: str) -> str:
+    digest = hashlib.sha256(code.encode("utf-8")).hexdigest()[:16]
+    return digest
 
 
 @dataclass(frozen=True)
@@ -39,11 +48,13 @@ def catalog_path() -> Path:
 
 
 def _header_map(sheet, header_row: int) -> dict[str, int]:
+    """Merge headers from sub-header row (e.g. row 6 AZ) and main header row."""
     mapping: dict[str, int] = {}
-    for c in range(sheet.ncols):
-        raw = str(sheet.cell_value(header_row, c)).strip()
-        if raw:
-            mapping[_norm_header(raw)] = c
+    for r in range(max(0, header_row - 1), header_row + 1):
+        for c in range(sheet.ncols):
+            raw = str(sheet.cell_value(r, c)).strip()
+            if raw:
+                mapping[_norm_header(raw)] = c
     return mapping
 
 
@@ -52,10 +63,14 @@ def _col(headers: dict[str, int], *candidates: str) -> int | None:
         key = _norm_header(name)
         if key in headers:
             return headers[key]
-    for key, idx in headers.items():
-        if all(_norm_header(c) in key for c in candidates):
-            return idx
     return None
+
+
+def _col_image(headers: dict[str, int]) -> int | None:
+    for key, idx in headers.items():
+        if "hình ảnh" in key and "sản phẩm" in key:
+            return idx
+    return _col(headers, "hình ảnh sản phẩm")
 
 
 def _cell_str(sheet, row: int, col: int | None) -> str:
@@ -85,7 +100,7 @@ def load_catalog(path_str: str) -> tuple[Product, ...]:
     if not path.is_file():
         raise FileNotFoundError(f"Không tìm thấy file AMIS: {path}")
 
-    wb = xlrd.open_workbook(str(path))
+    wb = xlrd.open_workbook(str(path), formatting_info=True)
     sheet = wb.sheet_by_index(0)
     header_row = next(
         (r for r in range(sheet.nrows) if "mã hàng" in _norm_header(sheet.cell_value(r, 0))),
@@ -101,13 +116,27 @@ def load_catalog(path_str: str) -> tuple[Product, ...]:
     col_desc = _col(headers, "mô tả")
     col_price = _col(headers, "đơn giá bán")
     col_vat = _col(headers, "thuế suất gtgt (%)", "thuế suất")
-    col_image = _col(headers, "hình ảnh sản phẩm", "hình ảnh")
+    col_image = _col_image(headers)
+    embedded_images = extract_embedded_images(path)
+    _IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     products: list[Product] = []
+    image_idx = 0
     for r in range(header_row + 1, sheet.nrows):
         code = _cell_str(sheet, r, col_code)
         if not code:
             continue
+
+        image_ref = _cell_str(sheet, r, col_image)
+        if not image_ref and image_idx < len(embedded_images):
+            blob = embedded_images[image_idx]
+            ext = ".png" if blob.startswith(b"\x89PNG") else ".jpg"
+            cache_file = _IMAGE_CACHE_DIR / f"{_safe_image_stem(code)}{ext}"
+            if not cache_file.is_file():
+                cache_file.write_bytes(blob)
+            image_ref = str(cache_file.relative_to(_ROOT))
+            image_idx += 1
+
         products.append(
             Product(
                 code=code,
@@ -116,7 +145,7 @@ def load_catalog(path_str: str) -> tuple[Product, ...]:
                 sale_price=_cell_float(sheet, r, col_price),
                 description=_cell_str(sheet, r, col_desc),
                 vat_percent=_cell_float(sheet, r, col_vat, 10.0),
-                image_ref=_cell_str(sheet, r, col_image),
+                image_ref=image_ref,
             )
         )
     return tuple(products)
