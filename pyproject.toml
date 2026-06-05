@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "POC: Word price reports + Streamlit UI + local discount history"
 requires-python = ">=3.12"
 dependencies = [
+    "num2words>=0.5.14",
     "pillow>=12.2.0",
     "python-docx>=1.2.0",
+    "requests>=2.33.1",
     "streamlit>=1.57.0",
+    "xlrd>=2.0.2",
 ]
