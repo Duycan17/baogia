@@ -11,3 +11,5 @@ wheels/
 
 # POC local discount history (may contain customer ids)
 data/customers.json
+data/bills/
+data/bills_index.json
